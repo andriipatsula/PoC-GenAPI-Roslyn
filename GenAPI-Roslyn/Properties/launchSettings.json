@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "TypeList": {
+      "commandName": "Project",
+      "commandLineArgs": "..\\..\\..\\TestLibrary\\Debug\\netcoreapp2.1\\TestLibrary.dll"
+    },
+    "R": {
+      "commandName": "Project",
+      "commandLineArgs": "C:\\Users\\apatsula\\Projects\\roslyn-hello-world\\myLibrary\\bin\\Release\\net6.0\\myLibrary.dll"
+    }
+  }
+}
