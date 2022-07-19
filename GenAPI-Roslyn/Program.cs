@@ -1,11 +1,19 @@
 ﻿using System;
+using System.Runtime.CompilerServices;
 
 namespace ApiView
 {
     class Program
     {
+        static String _help = "Usage: .\\GenAPI-Roslyn.exe mylibrary.dll";
         static void Main(string[] args)
         {
+            if (args.Length == 0 || args[0] == "--help")
+            {
+                Console.WriteLine(_help);
+                return;
+            }
+
             try
             {
                 /// path to dll
