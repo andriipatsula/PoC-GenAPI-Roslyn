@@ -6,5 +6,5 @@ Influenced by [Azure/APIView](https://github.com/Azure/azure-sdk-tools/tree/main
 
 Usage:
 ```
-.\GenAPI-Roslyn.exe <path to dll>
+.\GenAPI-Roslyn.exe Microsoft.CodeAnalysis.CSharp.dll >> Microsoft.CodeAnalysis.cs
 ```
