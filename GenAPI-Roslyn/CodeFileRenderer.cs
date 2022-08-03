@@ -63,7 +63,7 @@ namespace ApiView
                         }
                         RenderToken(token, stringBuilder, isDeprecatedToken);
                         break;
-                }                
+                }
             }
         }
 

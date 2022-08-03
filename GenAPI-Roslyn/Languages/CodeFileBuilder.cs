@@ -5,10 +5,8 @@ using APIView;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.SymbolDisplay;
-using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.IO;
 using System.Linq;
 
 namespace ApiView
@@ -18,7 +16,35 @@ namespace ApiView
         private static readonly char[] _newlineChars = new char[] { '\r', '\n' };
 
         SymbolDisplayFormat _defaultDisplayFormat = new SymbolDisplayFormat(
-            SymbolDisplayGlobalNamespaceStyle.Omitted,
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            delegateStyle: SymbolDisplayDelegateStyle.NameAndSignature,
+            extensionMethodStyle: SymbolDisplayExtensionMethodStyle.StaticMethod,
+            propertyStyle: SymbolDisplayPropertyStyle.ShowReadWriteDescriptor,
+            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.AllowDefaultLiteral |
+                                  SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers |
+                                  SymbolDisplayMiscellaneousOptions.RemoveAttributeSuffix |
+                                  SymbolDisplayMiscellaneousOptions.UseSpecialTypes |
+                                  SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier,
+                                  // AllowDefaultLiteral, CollapseTupleTypes
+            kindOptions: SymbolDisplayKindOptions.IncludeMemberKeyword,
+            parameterOptions: SymbolDisplayParameterOptions.IncludeDefaultValue |
+                              SymbolDisplayParameterOptions.IncludeExtensionThis |
+                              SymbolDisplayParameterOptions.IncludeName |
+                              SymbolDisplayParameterOptions.IncludeParamsRefOut |
+                              SymbolDisplayParameterOptions.IncludeType,
+            /// add option to print parameter names?
+            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeConstraints |
+                             SymbolDisplayGenericsOptions.IncludeTypeParameters |
+                             SymbolDisplayGenericsOptions.IncludeVariance,
+            memberOptions: SymbolDisplayMemberOptions.IncludeExplicitInterface |
+                           SymbolDisplayMemberOptions.IncludeConstantValue |
+                           SymbolDisplayMemberOptions.IncludeModifiers |
+                           SymbolDisplayMemberOptions.IncludeParameters |
+                           SymbolDisplayMemberOptions.IncludeType
+        );
+        SymbolDisplayFormat _defaultClassDisplayFormat = new SymbolDisplayFormat(
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
             delegateStyle: SymbolDisplayDelegateStyle.NameAndSignature,
             extensionMethodStyle: SymbolDisplayExtensionMethodStyle.StaticMethod,
             propertyStyle: SymbolDisplayPropertyStyle.ShowReadWriteDescriptor,
@@ -35,7 +61,6 @@ namespace ApiView
                               SymbolDisplayParameterOptions.IncludeType,
             /// add option to print parameter names?
             genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeConstraints |
-                             SymbolDisplayGenericsOptions.IncludeTypeConstraints |
                              SymbolDisplayGenericsOptions.IncludeTypeParameters |
                              SymbolDisplayGenericsOptions.IncludeVariance,
             memberOptions: SymbolDisplayMemberOptions.IncludeExplicitInterface |
@@ -70,12 +95,10 @@ namespace ApiView
             }
         }
 
-        public CodeFile Build(IAssemblySymbol assemblySymbol, List<DependencyInfo> dependencies)
+        public CodeFile Build(IAssemblySymbol assemblySymbol)
         {
             _assembly = assemblySymbol;
             var builder = new CodeFileTokensBuilder();
-
-            BuildDependencies(builder, dependencies);
 
             var navigationItems = new List<NavigationItem>();
             var namespaces = EnumerateNamespaces(assemblySymbol);
@@ -114,31 +137,6 @@ namespace ApiView
             return node;
         }
 
-        public static void BuildDependencies(CodeFileTokensBuilder builder, List<DependencyInfo> dependencies)
-        {
-            if (dependencies != null && dependencies.Any())
-            {
-                builder.NewLine();
-                builder.Append("Dependencies:", CodeFileTokenKind.Text);
-                builder.NewLine();
-                foreach (DependencyInfo dependency in dependencies)
-                {
-                    builder.Append(new CodeFileToken(dependency.Name, CodeFileTokenKind.Text)
-                    {
-                        // allow dependency to be commentable
-                        DefinitionId = dependency.Name
-                    });
-                    // don't include the version in the API sign-off diffs
-                    builder.Append(null, CodeFileTokenKind.SkipDiffRangeStart);
-                    builder.Append($"-{dependency.Version}", CodeFileTokenKind.Text);
-                    builder.Append(null, CodeFileTokenKind.SkipDiffRangeEnd);
-                    builder.NewLine();
-                }
-
-                builder.NewLine();
-            }
-        }
-
         private void Build(CodeFileTokensBuilder builder, INamespaceSymbol namespaceSymbol, List<NavigationItem> navigationItems)
         {
             builder.Keyword(SyntaxKind.NamespaceKeyword);
@@ -170,12 +168,7 @@ namespace ApiView
 
         private void BuildNamespaceName(CodeFileTokensBuilder builder, INamespaceSymbol namespaceSymbol)
         {
-            if (!namespaceSymbol.ContainingNamespace.IsGlobalNamespace)
-            {
-                BuildNamespaceName(builder, namespaceSymbol.ContainingNamespace);
-                builder.Punctuation(SyntaxKind.DotToken);
-            }
-            NodeFromSymbol(builder, namespaceSymbol);
+            builder.Punctuation(namespaceSymbol.OriginalDefinition.ToString());
         }
 
         private bool HasAnyPublicTypes(INamespaceSymbol subNamespaceSymbol)
@@ -194,13 +187,11 @@ namespace ApiView
             var navigationItem = new NavigationItem()
             {
                 NavigationId = namedType.GetId(),
-                //Text = namedType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
                 Text = namedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
             };
             navigationBuilder.Add(navigationItem);
             navigationItem.Tags.Add("TypeKind", namedType.TypeKind.ToString().ToLowerInvariant());
 
-            BuildDocumentation(builder, namedType);
             BuildAttributes(builder, namedType.GetAttributes());
 
             builder.WriteIndent();
@@ -212,6 +203,8 @@ namespace ApiView
             {
                 case TypeKind.Class:
                     BuildClassModifiers(builder, namedType);
+                    builder.Keyword(SyntaxKind.PartialKeyword);
+                    builder.Space();
                     builder.Keyword(SyntaxKind.ClassKeyword);
                     break;
                 case TypeKind.Delegate:
@@ -229,13 +222,48 @@ namespace ApiView
                         builder.Keyword(SyntaxKind.ReadOnlyKeyword);
                         builder.Space();
                     }
+                    builder.Keyword(SyntaxKind.PartialKeyword);
+                    builder.Space();
                     builder.Keyword(SyntaxKind.StructKeyword);
                     break;
             }
 
             builder.Space();
 
-            NodeFromSymbol(builder, namedType);
+            if (namedType.TypeKind == TypeKind.Class || namedType.TypeKind == TypeKind.Struct ||
+                namedType.TypeKind == TypeKind.Enum || namedType.TypeKind == TypeKind.Interface ||
+                namedType.TypeKind == TypeKind.Delegate)
+            {
+                builder.Append(new CodeFileToken()
+                {
+                    DefinitionId = namedType.GetId(),
+                    Kind = CodeFileTokenKind.LineIdMarker
+                });
+                if (NeedsAccessibility(namedType))
+                {
+                    builder.Keyword(SyntaxFacts.GetText(ToEffectiveAccessibility(namedType.DeclaredAccessibility)));
+                    builder.Space();
+                }
+
+                foreach (var symbolDisplayPart in namedType.ToDisplayParts(SymbolDisplayFormat.FullyQualifiedFormat))
+                {
+                    if (symbolDisplayPart.Kind == SymbolDisplayPartKind.ClassName)
+                    {
+                        var symbol = symbolDisplayPart.Symbol;
+                        var text = symbolDisplayPart.ToString();
+                    }
+                }
+
+                foreach (var symbolDisplayPart in namedType.ToDisplayParts(_defaultClassDisplayFormat))
+                {
+                    builder.Append(MapToken(namedType, symbolDisplayPart));
+                }
+
+            }
+            else
+            {
+                NodeFromSymbol(builder, namedType);
+            }
             if (namedType.TypeKind == TypeKind.Delegate)
             {
                 builder.Punctuation(SyntaxKind.SemicolonToken);
@@ -255,10 +283,11 @@ namespace ApiView
             {
                 BuildType(builder, namedTypeSymbol, navigationBuilder);
             }
-
             foreach (var member in SymbolOrderProvider.OrderMembers(namedType.GetMembers()))
             {
                 if (member.Kind == SymbolKind.NamedType || member.IsImplicitlyDeclared || !IsAccessible(member)) continue;
+                //if (member.Kind == SymbolKind.NamedType || member.IsImplicitlyDeclared || (!(member.IsOverride || member.IsAbstract) && !IsAccessible(member))) continue;
+                //if (member.Kind == SymbolKind.NamedType || member.IsImplicitlyDeclared || (!member.IsOverride && !IsAccessible(member))) continue;
                 if (member is IMethodSymbol method)
                 {
                     if (method.MethodKind == MethodKind.PropertyGet ||
@@ -274,23 +303,6 @@ namespace ApiView
             }
 
             CloseBrace(builder);
-        }
-
-        private void BuildDocumentation(CodeFileTokensBuilder builder, ISymbol symbol)
-        {
-            var lines = symbol.GetDocumentationCommentXml().Trim().Split(_newlineChars);
-            if (lines.All(string.IsNullOrWhiteSpace))
-            {
-                return;
-            }
-            builder.Append(null, CodeFileTokenKind.DocumentRangeStart);
-            foreach (var line in lines)
-            {
-                builder.WriteIndent();
-                builder.Comment("// " + line.Trim());
-                builder.NewLine();
-            }
-            builder.Append(null, CodeFileTokenKind.DocumentRangeEnd);
         }
 
         private static void BuildClassModifiers(CodeFileTokensBuilder builder, INamedTypeSymbol namedType)
@@ -363,7 +375,6 @@ namespace ApiView
 
         private void BuildMember(CodeFileTokensBuilder builder, ISymbol member)
         {
-            BuildDocumentation(builder, member);
             BuildAttributes(builder, member.GetAttributes());
 
             builder.WriteIndent();
@@ -373,7 +384,7 @@ namespace ApiView
             {
                 builder.Punctuation(SyntaxKind.CommaToken);
             }
-            else if (member.Kind != SymbolKind.Property)
+            else if (member.Kind != SymbolKind.Property && member.Kind != SymbolKind.Event && member.Kind != SymbolKind.Field && !member.IsAbstract)
             {
                 builder.Space();
                 builder.Punctuation(SyntaxKind.OpenBraceToken);
@@ -386,7 +397,26 @@ namespace ApiView
 
                 builder.Space();
                 builder.Punctuation(SyntaxKind.CloseBraceToken);
-                //builder.Punctuation(SyntaxKind.SemicolonToken);
+            }
+            else if (member.Kind == SymbolKind.Event)
+            {
+                // TODO:
+                if (!member.IsAbstract)
+                {
+                    builder.Punctuation(" { add { } remove { } }");
+                }
+                else
+                {
+                    builder.Punctuation(SyntaxKind.SemicolonToken);
+                }
+            }
+            else if (member.Kind == SymbolKind.Field)
+            {
+                builder.Punctuation(SyntaxKind.SemicolonToken);
+            }
+            else if (member.Kind == SymbolKind.Method && member.IsAbstract)
+            {
+                builder.Punctuation(SyntaxKind.SemicolonToken);
             }
 
             builder.NewLine();
@@ -394,7 +424,6 @@ namespace ApiView
 
         private void BuildAttributes(CodeFileTokensBuilder builder, ImmutableArray<AttributeData> attributes)
         {
-            const string attributeSuffix = "Attribute";
             foreach (var attribute in attributes)
             {
                 if (!IsAccessible(attribute.AttributeClass) || IsSkippedAttribute(attribute.AttributeClass))
@@ -403,51 +432,9 @@ namespace ApiView
                 }
                 builder.WriteIndent();
                 builder.Punctuation(SyntaxKind.OpenBracketToken);
-                var name = attribute.AttributeClass.Name;
-                if (name.EndsWith(attributeSuffix))
-                {
-                    name = name.Substring(0, name.Length - attributeSuffix.Length);
-                }
-                builder.Append(name, CodeFileTokenKind.TypeName);
-                if (attribute.ConstructorArguments.Any())
-                {
-                    builder.Punctuation(SyntaxKind.OpenParenToken);
-                    bool first = true;
+                var str = attribute.ToString();
+                builder.Punctuation(str);
 
-                    foreach (var argument in attribute.ConstructorArguments)
-                    {
-                        if (!first)
-                        {
-                            builder.Punctuation(SyntaxKind.CommaToken);
-                            builder.Space();
-                        }
-                        else
-                        {
-                            first = false;
-                        }
-                        BuildTypedConstant(builder, argument);
-                    }
-
-                    foreach (var argument in attribute.NamedArguments)
-                    {
-                        if (!first)
-                        {
-                            builder.Punctuation(SyntaxKind.CommaToken);
-                            builder.Space();
-                        }
-                        else
-                        {
-                            first = false;
-                        }
-                        builder.Append(argument.Key, CodeFileTokenKind.Text);
-                        builder.Space();
-                        builder.Punctuation(SyntaxKind.EqualsToken);
-                        builder.Space();
-                        BuildTypedConstant(builder, argument.Value);
-                    }
-
-                    builder.Punctuation(SyntaxKind.CloseParenToken);
-                }
                 builder.Punctuation(SyntaxKind.CloseBracketToken);
                 builder.NewLine();
             }
@@ -462,6 +449,7 @@ namespace ApiView
                 case "IteratorStateMachineAttribute":
                 case "DefaultMemberAttribute":
                 case "AsyncIteratorStateMachineAttribute":
+                case "TupleElementNamesAttribute":
                     return true;
                 default:
                     return false;
@@ -544,12 +532,41 @@ namespace ApiView
         {
             if (NeedsAccessibility(symbol))
             {
-                builder.Keyword(SyntaxFacts.GetText(ToEffectiveAccessibility(symbol.DeclaredAccessibility)));
-                builder.Space();
+                if (symbol.DeclaredAccessibility == Accessibility.ProtectedOrFriend && symbol.IsOverride)
+                {
+                    builder.Keyword(SyntaxFacts.GetText(Accessibility.Protected));
+                    builder.Space();
+                }
+                else
+                {
+                    builder.Keyword(SyntaxFacts.GetText(ToEffectiveAccessibility(symbol.DeclaredAccessibility)));
+                    builder.Space();
+                }
             }
+            bool setOrGetKeywordFound = false;
             foreach (var symbolDisplayPart in symbol.ToDisplayParts(_defaultDisplayFormat))
             {
+                if (setOrGetKeywordFound)
+                {
+                    setOrGetKeywordFound = false;
+                    continue;
+                }
+
                 builder.Append(MapToken(definedSymbol, symbolDisplayPart));
+
+                if (symbolDisplayPart.Kind == SymbolDisplayPartKind.Keyword && !symbol.IsAbstract)
+                {
+                    if (symbolDisplayPart.ToString() == "set")
+                    {
+                        builder.Punctuation(" { }");
+                        setOrGetKeywordFound = true;
+                    }
+                    else if (symbolDisplayPart.ToString() == "get")
+                    {
+                        builder.Punctuation(" { throw null; }");
+                        setOrGetKeywordFound = true;
+                    }
+                }
             }
         }
 
@@ -575,6 +592,7 @@ namespace ApiView
             switch (symbolDisplayPart.Kind)
             {
                 case SymbolDisplayPartKind.TypeParameterName:
+                case SymbolDisplayPartKind.ParameterName:
                 case SymbolDisplayPartKind.AliasName:
                 case SymbolDisplayPartKind.AssemblyName:
                 case SymbolDisplayPartKind.ClassName:
@@ -638,10 +656,12 @@ namespace ApiView
         {
             switch (accessibility)
             {
-                case Accessibility.ProtectedAndInternal:
+                case Accessibility.Internal:
                     return Accessibility.Internal;
-                case Accessibility.ProtectedOrInternal:
+                case Accessibility.Protected:
                     return Accessibility.Protected;
+                case Accessibility.Private:
+                    return Accessibility.Private;
                 default:
                     return accessibility;
             }

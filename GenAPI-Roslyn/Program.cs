@@ -20,7 +20,7 @@ namespace ApiView
                 var dllPath = args[0];
                 var assemblySymbol = CompilationFactory.GetCompilation(dllPath);
                 var renderer = new CodeFileRenderer();
-                var codeNode = new CodeFileBuilder().Build(assemblySymbol, null);
+                var codeNode = new CodeFileBuilder().Build(assemblySymbol);
                 //Console.WriteLine(codeNode.ToString());
                 var codeLines = renderer.Render(codeNode);
                 /// output ref package to console
